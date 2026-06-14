@@ -5,74 +5,13 @@ let observer = null;
 let isAltPressed = false;
 let tooltipElement = null;
 let isEnabled = true;
+let isTranslationMode = false;
 let isPinyinEnabled = true;
-
-// Track context invalidation state when extension is reloaded/updated
-let isContextInvalidated = false;
-
-// Store event listener references so we can remove them on context invalidation cleanup
-let mouseOverListener = null;
-let mouseOutListener = null;
-let keyDownListener = null;
-let keyUpListener = null;
-let blurListener = null;
+const translationCache = new Map();
 
 // Debouncing mechanism for MutationObserver
 let scanTimeout = null;
 let pendingNodesToScan = [];
-
-// Check if extension context has been invalidated
-function checkContextInvalidated() {
-  if (isContextInvalidated) return true;
-
-  let invalidated = false;
-  try {
-    if (!chrome.runtime || !chrome.runtime.id) {
-      invalidated = true;
-    }
-  } catch (e) {
-    invalidated = true;
-  }
-
-  if (invalidated) {
-    isContextInvalidated = true;
-    cleanUpInvalidatedContext();
-  }
-
-  return isContextInvalidated;
-}
-
-// Clean up resources, mutation observers, and event listeners when context becomes invalid
-function cleanUpInvalidatedContext() {
-  stopObserver();
-  hideTooltip();
-
-  if (mouseOverListener) {
-    document.body.removeEventListener('mouseover', mouseOverListener);
-    mouseOverListener = null;
-  }
-  if (mouseOutListener) {
-    document.body.removeEventListener('mouseout', mouseOutListener);
-    mouseOutListener = null;
-  }
-  if (keyDownListener) {
-    window.removeEventListener('keydown', keyDownListener);
-    keyDownListener = null;
-  }
-  if (keyUpListener) {
-    window.removeEventListener('keyup', keyUpListener);
-    keyUpListener = null;
-  }
-  if (blurListener) {
-    window.removeEventListener('blur', blurListener);
-    blurListener = null;
-  }
-
-  if (tooltipElement && tooltipElement.parentNode) {
-    tooltipElement.parentNode.removeChild(tooltipElement);
-    tooltipElement = null;
-  }
-}
 
 // Check if page contains Chinese characters to avoid overhead on non-Chinese sites
 function pageContainsChinese() {
@@ -141,10 +80,124 @@ function isValidChineseTextNode(node) {
   return true;
 }
 
+// Group segments into logical sentences based on punctuation
+function groupSegmentsIntoSentences(segments) {
+  const sentences = [];
+  let currentSentence = [];
+
+  for (const seg of segments) {
+    currentSentence.push(seg);
+
+    // End sentence on common sentence-ending marks or newlines
+    const isPunctuation = !seg.isChinese && /[\u3002\uff01\uff1f\.\!\?\n\r]/.test(seg.word);
+    if (isPunctuation) {
+      sentences.push(currentSentence);
+      currentSentence = [];
+    }
+  }
+
+  if (currentSentence.length > 0) {
+    sentences.push(currentSentence);
+  }
+
+  return sentences;
+}
+
+// Fetch translations for sentences on the page in a single batch
+async function translatePageSentences() {
+  if (!chrome.runtime?.id) {
+    stopObserver();
+    return;
+  }
+  const sentenceElements = Array.from(document.querySelectorAll('.zh-lens-sentence'));
+  const textsToTranslate = [];
+
+  for (const elem of sentenceElements) {
+    const text = elem.getAttribute('data-sentence-text')?.trim();
+    if (text && !translationCache.has(text) && !textsToTranslate.includes(text)) {
+      textsToTranslate.push(text);
+    }
+  }
+
+  if (textsToTranslate.length === 0) {
+    applyTranslationsFromCache();
+    return;
+  }
+
+  try {
+    const response = await chrome.runtime.sendMessage({
+      type: 'TRANSLATE_BATCH',
+      texts: textsToTranslate
+    });
+
+    if (response && response.success && response.result) {
+      const responseMap = new Map();
+      response.result.forEach(item => {
+        if (item.source && item.translated) {
+          responseMap.set(item.source, item.translated);
+        }
+      });
+
+      textsToTranslate.forEach((originalText, index) => {
+        let translation = responseMap.get(originalText);
+        // Fallback to index-based matching
+        if (!translation && response.result[index]) {
+          translation = response.result[index].translated;
+        }
+
+        if (translation) {
+          translationCache.set(originalText, translation);
+        }
+      });
+
+      applyTranslationsFromCache();
+    }
+  } catch (error) {
+    console.warn('Zh-Lens: Batch translation failed.', error);
+  }
+}
+
+// Match ellipsis at the end of the original text
+function matchEllipsis(original, translation) {
+  if (!original || !translation) return translation;
+  const trimmedOrig = original.trim();
+  const trimmedTrans = translation.trim();
+
+  if (trimmedOrig.endsWith('...')) {
+    if (!trimmedTrans.endsWith('...')) {
+      return trimmedTrans + '...';
+    }
+  } else if (trimmedOrig.endsWith('…')) {
+    if (!trimmedTrans.endsWith('…')) {
+      return trimmedTrans + '…';
+    }
+  }
+  return translation;
+}
+
+// Apply translations from the local cache map to elements
+function applyTranslationsFromCache() {
+  const sentenceElements = document.querySelectorAll('.zh-lens-sentence');
+  sentenceElements.forEach(elem => {
+    const text = elem.getAttribute('data-sentence-text')?.trim();
+    if (text && translationCache.has(text)) {
+      const transSpan = elem.querySelector('.zh-lens-sentence-translated-text');
+      if (transSpan) {
+        let translation = translationCache.get(text);
+        translation = matchEllipsis(text, translation);
+        transSpan.textContent = translation;
+        elem.setAttribute('data-translated', 'true');
+      }
+    }
+  });
+}
 
 // Run FMM batch segmentation and DOM replacement
 async function scanAndProcessNodes(roots) {
-  if (checkContextInvalidated()) return;
+  if (!chrome.runtime?.id) {
+    stopObserver();
+    return;
+  }
   if (!isEnabled) return;
   
   try {
@@ -171,95 +224,146 @@ async function scanAndProcessNodes(roots) {
       if (!segments || !node.parentNode) continue;
 
       const fragment = document.createDocumentFragment();
+      const sentenceGroups = groupSegmentsIntoSentences(segments);
 
-      for (const seg of segments) {
-        if (seg.isChinese) {
-          const ruby = document.createElement('ruby');
-          ruby.className = 'zh-lens-word';
+      for (const group of sentenceGroups) {
+        const sentenceText = group.map(seg => seg.word).join('').trim();
+        if (!sentenceText) continue;
 
-          const readings = seg.entry?.readings || [];
-          const pinyinStr = readings[0]?.pinyin || '';
-          const syllables = pinyinStr.split(/\s+/).filter(Boolean);
-          const chars = Array.from(seg.word);
+        const containsChinese = group.some(seg => seg.isChinese);
 
-          if (chars.length === syllables.length && syllables.length > 0) {
-            // Map character-to-syllable 1:1 for individual coloring
-            for (let idx = 0; idx < chars.length; idx++) {
-              const char = chars[idx];
-              const syl = syllables[idx];
-              const { marked, tone } = convertSyllable(syl);
+        if (containsChinese) {
+          const sentenceSpan = document.createElement('span');
+          sentenceSpan.className = 'zh-lens-sentence';
+          sentenceSpan.setAttribute('data-sentence-text', sentenceText);
 
-              const rb = document.createElement('rb');
-              rb.textContent = char;
-              ruby.appendChild(rb);
+          const originalSpan = document.createElement('span');
+          originalSpan.className = 'zh-lens-sentence-original';
 
-              const rt = document.createElement('rt');
-              rt.textContent = marked;
-              rt.className = `zh-tone-${tone} zh-pinyin`;
-              ruby.appendChild(rt);
-            }
-          } else {
-            // Fallback: whole word and joint pinyin
-            const rb = document.createElement('rb');
-            rb.textContent = seg.word;
-            ruby.appendChild(rb);
+          for (const seg of group) {
+            if (seg.isChinese) {
+              const ruby = document.createElement('ruby');
+              ruby.className = 'zh-lens-word';
 
-            const rt = document.createElement('rt');
-            rt.className = 'zh-pinyin';
-            if (syllables.length > 0) {
-              rt.textContent = syllables.map(s => convertSyllable(s).marked).join(' ');
-              if (syllables.length === 1) {
-                const { tone } = convertSyllable(syllables[0]);
-                rt.className = `zh-tone-${tone} zh-pinyin`;
+              const readings = seg.entry?.readings || [];
+              const pinyinStr = readings[0]?.pinyin || '';
+              const syllables = pinyinStr.split(/\s+/).filter(Boolean);
+              const chars = Array.from(seg.word);
+
+              if (chars.length === syllables.length && syllables.length > 0) {
+                // Map character-to-syllable 1:1 for individual coloring
+                for (let idx = 0; idx < chars.length; idx++) {
+                  const char = chars[idx];
+                  const syl = syllables[idx];
+                  const { marked, tone } = convertSyllable(syl);
+
+                  const rb = document.createElement('rb');
+                  rb.textContent = char;
+                  ruby.appendChild(rb);
+
+                  const rt = document.createElement('rt');
+                  rt.textContent = marked;
+                  rt.className = `zh-tone-${tone} zh-pinyin`;
+                  ruby.appendChild(rt);
+                }
+              } else {
+                // Fallback: whole word and joint pinyin
+                const rb = document.createElement('rb');
+                rb.textContent = seg.word;
+                ruby.appendChild(rb);
+
+                const rt = document.createElement('rt');
+                rt.className = 'zh-pinyin';
+                if (syllables.length > 0) {
+                  rt.textContent = syllables.map(s => convertSyllable(s).marked).join(' ');
+                  if (syllables.length === 1) {
+                    const { tone } = convertSyllable(syllables[0]);
+                    rt.className = `zh-tone-${tone} zh-pinyin`;
+                  }
+                } else {
+                  rt.textContent = ' ';
+                }
+                ruby.appendChild(rt);
               }
+
+              // Store raw entry data in HTML attributes for tooltips
+              if (seg.entry) {
+                ruby.setAttribute('data-simplified', seg.entry.simplified || seg.word);
+                ruby.setAttribute('data-traditional', seg.entry.traditional || '');
+                ruby.setAttribute('data-readings', JSON.stringify(readings));
+              } else {
+                ruby.setAttribute('data-simplified', seg.word);
+                ruby.setAttribute('data-traditional', '');
+                ruby.setAttribute('data-readings', JSON.stringify([]));
+              }
+
+              originalSpan.appendChild(ruby);
             } else {
-              rt.textContent = ' ';
+              if (/\n/.test(seg.word)) {
+                const parts = seg.word.split(/(\r?\n)/);
+                parts.forEach(part => {
+                  if (/^\r?\n$/.test(part)) {
+                    // Append newline outside the hidden original span so it stays active in translation mode
+                    sentenceSpan.appendChild(document.createTextNode(part));
+                  } else if (part) {
+                    originalSpan.appendChild(document.createTextNode(part));
+                  }
+                });
+              } else {
+                originalSpan.appendChild(document.createTextNode(seg.word));
+              }
             }
-            ruby.appendChild(rt);
           }
 
-          // Store raw entry data in HTML attributes for tooltips
-          if (seg.entry) {
-            ruby.setAttribute('data-simplified', seg.entry.simplified || seg.word);
-            ruby.setAttribute('data-traditional', seg.entry.traditional || '');
-            ruby.setAttribute('data-readings', JSON.stringify(readings));
+          sentenceSpan.appendChild(originalSpan);
+
+          // Add the outer sentence-level translation tag
+          const translationSpan = document.createElement('span');
+          translationSpan.className = 'zh-lens-sentence-translated-text';
+          
+          const hasTranslation = translationCache.has(sentenceText);
+          if (hasTranslation) {
+            let translation = translationCache.get(sentenceText);
+            translation = matchEllipsis(sentenceText, translation);
+            translationSpan.textContent = translation;
+            sentenceSpan.setAttribute('data-translated', 'true');
           } else {
-            ruby.setAttribute('data-simplified', seg.word);
-            ruby.setAttribute('data-traditional', '');
-            ruby.setAttribute('data-readings', JSON.stringify([]));
+            translationSpan.textContent = '';
           }
+          sentenceSpan.appendChild(translationSpan);
 
-          fragment.appendChild(ruby);
+          fragment.appendChild(sentenceSpan);
         } else {
           // Plain non-Chinese segment
-          fragment.appendChild(document.createTextNode(seg.word));
+          for (const seg of group) {
+            fragment.appendChild(document.createTextNode(seg.word));
+          }
         }
       }
 
       node.parentNode.replaceChild(fragment, node);
     }
   } catch (error) {
-    if (error.message && error.message.includes('context invalidated')) {
-      isContextInvalidated = true;
-      cleanUpInvalidatedContext();
-      return;
-    }
     console.error('Zh-Lens DOM Processing Error:', error);
   } finally {
-    if (!isContextInvalidated) {
-      // Re-engage observer
-      startObserver();
+    // Re-engage observer
+    startObserver();
+    // Translate newly loaded sentences if in translation mode
+    if (isTranslationMode) {
+      translatePageSentences();
     }
   }
 }
 
 // Set up MutationObserver
 function startObserver() {
-  if (checkContextInvalidated()) return;
   if (observer || !isEnabled) return;
 
   observer = new MutationObserver((mutations) => {
-    if (checkContextInvalidated()) return;
+    if (!chrome.runtime?.id) {
+      stopObserver();
+      return;
+    }
     let hasAdditions = false;
     const addedNodes = [];
 
@@ -324,7 +428,6 @@ function scheduleScan(nodes) {
   if (scanTimeout) clearTimeout(scanTimeout);
 
   scanTimeout = setTimeout(() => {
-    if (checkContextInvalidated()) return;
     const nodesToProcess = [...pendingNodesToScan];
     pendingNodesToScan = [];
     scanAndProcessNodes(nodesToProcess);
@@ -443,9 +546,29 @@ function escapeHTML(str) {
     .replace(/'/g, '&#039;');
 }
 
+// Toggle translation mode active state and class on body
+function toggleTranslationMode(forceState) {
+  const nextState = (forceState !== undefined) ? forceState : !isTranslationMode;
+  if (isTranslationMode === nextState) return; // Avoid redundant toggles
+
+  isTranslationMode = nextState;
+
+  if (isTranslationMode) {
+    document.body.classList.add('zh-lens-translation-active');
+    translatePageSentences();
+    // If translation is turned ON, we turn Pinyin OFF
+    if (isPinyinEnabled) {
+      togglePinyinMode(false);
+    }
+  } else {
+    document.body.classList.remove('zh-lens-translation-active');
+  }
+
+  chrome.storage.local.set({ translationMode: isTranslationMode });
+}
+
 // Toggle Pinyin display mode
 function togglePinyinMode(forceState) {
-  if (checkContextInvalidated()) return;
   const nextState = (forceState !== undefined) ? forceState : !isPinyinEnabled;
   if (isPinyinEnabled === nextState) return; // Avoid redundant toggles
 
@@ -453,6 +576,10 @@ function togglePinyinMode(forceState) {
 
   if (isPinyinEnabled) {
     document.body.classList.remove('zh-lens-pinyin-disabled');
+    // If Pinyin is turned ON, we turn Translation OFF
+    if (isTranslationMode) {
+      toggleTranslationMode(false);
+    }
   } else {
     document.body.classList.add('zh-lens-pinyin-disabled');
   }
@@ -462,29 +589,22 @@ function togglePinyinMode(forceState) {
 
 // Event Listeners
 function setupEventListeners() {
-  if (checkContextInvalidated()) return;
-
   // Event Delegation for hover triggers
-  mouseOverListener = (e) => {
-    if (checkContextInvalidated()) return;
+  document.body.addEventListener('mouseover', (e) => {
     const ruby = e.target.closest('ruby.zh-lens-word');
     if (ruby && isAltPressed) {
       showTooltip(ruby);
     }
-  };
-  document.body.addEventListener('mouseover', mouseOverListener);
+  });
 
-  mouseOutListener = (e) => {
-    if (checkContextInvalidated()) return;
+  document.body.addEventListener('mouseout', (e) => {
     const ruby = e.target.closest('ruby.zh-lens-word');
     if (ruby) {
       hideTooltip();
     }
-  };
-  document.body.addEventListener('mouseout', mouseOutListener);
+  });
 
-  keyDownListener = (e) => {
-    if (checkContextInvalidated()) return;
+  window.addEventListener('keydown', (e) => {
     if (e.repeat) return; // Prevent OS key-repeat from triggering multiple toggles
 
     if (e.key === 'Alt') {
@@ -495,42 +615,47 @@ function setupEventListeners() {
       }
     }
 
-    // Toggle pinyin display on Alt+Q key combination press
+    // Toggle translation on Alt+Q key combination press
     if (e.altKey && (e.key.toLowerCase() === 'q' || e.code === 'KeyQ')) {
-      togglePinyinMode(!isPinyinEnabled);
+      if (isTranslationMode) {
+        togglePinyinMode(true);
+      } else {
+        toggleTranslationMode(true);
+      }
     }
-  };
-  window.addEventListener('keydown', keyDownListener);
+  });
 
-  keyUpListener = (e) => {
-    if (checkContextInvalidated()) return;
+  window.addEventListener('keyup', (e) => {
     if (e.key === 'Alt') {
       isAltPressed = false;
       hideTooltip();
     }
-  };
-  window.addEventListener('keyup', keyUpListener);
+  });
 
-  blurListener = () => {
-    if (checkContextInvalidated()) return;
+  window.addEventListener('blur', () => {
     isAltPressed = false;
     hideTooltip();
-  };
-  window.addEventListener('blur', blurListener);
+  });
 }
 
 // Listen for messages from popup or background commands
 chrome.runtime.onMessage.addListener((message, sender, sendResponse) => {
-  if (message.type === 'TOGGLE_PINYIN_MODE') {
-    togglePinyinMode(!isPinyinEnabled);
-    if (sendResponse) sendResponse({ success: true, isPinyinEnabled });
+  if (message.type === 'TOGGLE_TRANSLATION_MODE') {
+    // Swap modes: if Translation Mode is active, switch to Pinyin, and vice-versa
+    if (isTranslationMode) {
+      togglePinyinMode(true);
+    } else {
+      toggleTranslationMode(true);
+    }
+    if (sendResponse) sendResponse({ success: true, isTranslationMode, isPinyinEnabled });
   }
 });
 
 // Initialize Extension Settings
-chrome.storage.local.get({ enabled: true, pinyinEnabled: true }, (settings) => {
+chrome.storage.local.get({ enabled: true, pinyinEnabled: true, translationMode: false }, (settings) => {
   isEnabled = settings.enabled;
   isPinyinEnabled = settings.pinyinEnabled;
+  isTranslationMode = settings.translationMode;
   if (isEnabled) {
     if (document.readyState === 'loading') {
       document.addEventListener('DOMContentLoaded', onPageLoad);
@@ -542,7 +667,6 @@ chrome.storage.local.get({ enabled: true, pinyinEnabled: true }, (settings) => {
 
 // React to global settings toggle changes
 chrome.storage.onChanged.addListener((changes) => {
-  if (checkContextInvalidated()) return;
   if (changes.enabled) {
     isEnabled = changes.enabled.newValue;
     if (isEnabled) {
@@ -552,7 +676,9 @@ chrome.storage.onChanged.addListener((changes) => {
       hideTooltip();
     }
   }
-
+  if (changes.translationMode) {
+    toggleTranslationMode(changes.translationMode.newValue);
+  }
   if (changes.pinyinEnabled) {
     togglePinyinMode(changes.pinyinEnabled.newValue);
   }
@@ -563,6 +689,10 @@ function onPageLoad() {
     // Apply initial toggles on load
     if (!isPinyinEnabled) {
       document.body.classList.add('zh-lens-pinyin-disabled');
+    }
+    if (isTranslationMode) {
+      document.body.classList.add('zh-lens-translation-active');
+      translatePageSentences();
     }
   });
   startObserver();

@@ -55,11 +55,13 @@ function updateUI() {
 }
 
 const pinyinToggle = document.getElementById('pinyin-toggle');
+const translationToggle = document.getElementById('translation-toggle');
 
 // Load current settings
-chrome.storage.local.get({ enabled: true, pinyinEnabled: true }, (settings) => {
+chrome.storage.local.get({ enabled: true, pinyinEnabled: true, translationMode: false }, (settings) => {
   enableToggle.checked = settings.enabled;
   pinyinToggle.checked = settings.pinyinEnabled;
+  translationToggle.checked = settings.translationMode;
 });
 
 // Update settings on toggle
@@ -68,16 +70,41 @@ enableToggle.addEventListener('change', () => {
 });
 
 pinyinToggle.addEventListener('change', () => {
-  chrome.storage.local.set({ pinyinEnabled: pinyinToggle.checked });
+  if (pinyinToggle.checked) {
+    // Negate translation when pinyin is turned ON
+    translationToggle.checked = false;
+    chrome.storage.local.set({ 
+      pinyinEnabled: true,
+      translationMode: false
+    });
+  } else {
+    chrome.storage.local.set({ pinyinEnabled: false });
+  }
 });
 
-// Sync checkboxes if settings change externally (like via Alt+Q hotkey on a page)
+translationToggle.addEventListener('change', () => {
+  if (translationToggle.checked) {
+    // Negate pinyin when translation is turned ON
+    pinyinToggle.checked = false;
+    chrome.storage.local.set({
+      translationMode: true,
+      pinyinEnabled: false
+    });
+  } else {
+    chrome.storage.local.set({ translationMode: false });
+  }
+});
+
+// Sync checkboxes if settings change externally (like via Alt+Shift hotkey on a page)
 chrome.storage.onChanged.addListener((changes) => {
   if (changes.enabled) {
     enableToggle.checked = changes.enabled.newValue;
   }
   if (changes.pinyinEnabled) {
     pinyinToggle.checked = changes.pinyinEnabled.newValue;
+  }
+  if (changes.translationMode) {
+    translationToggle.checked = changes.translationMode.newValue;
   }
 });
 

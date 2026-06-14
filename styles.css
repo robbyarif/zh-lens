@@ -147,7 +147,40 @@ ruby.zh-lens-word > rt.zh-tone-5 {
   margin-bottom: 0;
 }
 
+/* Sentence-level outer container */
+span.zh-lens-sentence {
+  display: inline;
+}
 
+/* In-place translation display styling */
+.zh-lens-sentence-translated-text {
+  display: none;
+}
+.zh-lens-sentence-original {
+  display: inline;
+}
+
+/* When translation mode is active, hide original Chinese text and show English in-place ONLY for translated sentences */
+body.zh-lens-translation-active .zh-lens-sentence[data-translated="true"] .zh-lens-sentence-original {
+  display: none !important;
+}
+body.zh-lens-translation-active .zh-lens-sentence[data-translated="true"] .zh-lens-sentence-translated-text {
+  display: inline !important;
+  font-family: inherit;
+  font-size: inherit;
+  font-weight: inherit;
+  color: inherit;
+  user-select: text;
+}
+
+/* When translation mode is active, also hide pinyin for untranslated text so they show as clean Chinese characters */
+body.zh-lens-translation-active ruby.zh-lens-word > rt {
+  display: none !important;
+}
+body.zh-lens-translation-active ruby.zh-lens-word {
+  ruby-position: initial;
+  -webkit-ruby-position: initial;
+}
 
 /* Pinyin Toggle Mode: Hide pinyin annotations but keep tooltips */
 body.zh-lens-pinyin-disabled ruby.zh-lens-word > rt {

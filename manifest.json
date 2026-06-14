@@ -11,12 +11,12 @@
     "https://*/*"
   ],
   "commands": {
-    "toggle-pinyin-mode": {
+    "toggle-translation-mode": {
       "suggested_key": {
         "default": "Alt+Q",
         "mac": "Alt+Q"
       },
-      "description": "Toggle Pinyin display"
+      "description": "Toggle between Pinyin and Translation mode"
     }
   },
   "background": {

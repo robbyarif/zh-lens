@@ -273,6 +273,70 @@ async function handleSegmentBatch(texts) {
   return result;
 }
 
+// Google Translate API Integration
+async function translateChunk(chunk, targetLang) {
+  const joinedText = chunk.join('\n');
+  const url = `https://translate.googleapis.com/translate_a/single?client=gtx&sl=zh-CN&tl=${targetLang}&dt=t&q=${encodeURIComponent(joinedText)}`;
+  const results = [];
+
+  try {
+    const response = await fetch(url);
+    if (!response.ok) {
+      console.warn(`Translation chunk failed with status: ${response.status}`);
+      return [];
+    }
+
+    const data = await response.json();
+    if (data && data[0]) {
+      data[0].forEach(item => {
+        if (Array.isArray(item) && item.length >= 2) {
+          const translated = item[0];
+          const source = item[1];
+          if (translated !== undefined && source !== undefined) {
+            results.push({
+              source: source.trim(),
+              translated: translated.trim()
+            });
+          }
+        }
+      });
+    }
+  } catch (error) {
+    console.warn('Error during translation chunk fetch:', error);
+  }
+
+  return results;
+}
+
+async function translateTexts(texts, targetLang = 'en') {
+  if (!texts || texts.length === 0) return [];
+
+  const results = [];
+  let currentChunk = [];
+  let currentLength = 0;
+  const maxLength = 1500; // Limit encoded text query size to prevent URL limit failures
+
+  for (const text of texts) {
+    const encodedText = encodeURIComponent(text);
+    // If adding this text would exceed the limit, translate the current chunk
+    if (currentLength + encodedText.length + 1 > maxLength && currentChunk.length > 0) {
+      const chunkResults = await translateChunk(currentChunk, targetLang);
+      results.push(...chunkResults);
+      currentChunk = [];
+      currentLength = 0;
+    }
+    currentChunk.push(text);
+    currentLength += encodedText.length + 1; // +1 for the encoded newline
+  }
+
+  if (currentChunk.length > 0) {
+    const chunkResults = await translateChunk(currentChunk, targetLang);
+    results.push(...chunkResults);
+  }
+
+  return results;
+}
+
 // Message Dispatcher
 chrome.runtime.onMessage.addListener((message, sender, sendResponse) => {
   if (message.type === 'SEGMENT_BATCH') {
@@ -280,6 +344,13 @@ chrome.runtime.onMessage.addListener((message, sender, sendResponse) => {
       .then(result => sendResponse({ success: true, result }))
       .catch(err => sendResponse({ success: false, error: err.message }));
     return true; // Keep message channel open asynchronously
+  }
+
+  if (message.type === 'TRANSLATE_BATCH') {
+    translateTexts(message.texts)
+      .then(result => sendResponse({ success: true, result }))
+      .catch(err => sendResponse({ success: false, error: err.message }));
+    return true;
   }
 
   if (message.type === 'GET_STATUS') {
@@ -304,10 +375,10 @@ chrome.runtime.onMessage.addListener((message, sender, sendResponse) => {
 
 // Keyboard Commands Listener
 chrome.commands.onCommand.addListener((command) => {
-  if (command === 'toggle-pinyin-mode') {
+  if (command === 'toggle-translation-mode') {
     chrome.tabs.query({ active: true, currentWindow: true }, (tabs) => {
       if (tabs[0]) {
-        chrome.tabs.sendMessage(tabs[0].id, { type: 'TOGGLE_PINYIN_MODE' }).catch(() => {
+        chrome.tabs.sendMessage(tabs[0].id, { type: 'TOGGLE_TRANSLATION_MODE' }).catch(() => {
           // Ignore tab mismatch errors
         });
       }
