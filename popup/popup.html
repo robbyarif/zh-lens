@@ -1,0 +1,93 @@
+<!DOCTYPE html>
+<html>
+<head>
+  <meta charset="utf-8">
+  <link rel="stylesheet" href="popup.css">
+</head>
+<body>
+  <div class="card">
+    <div class="header">
+      <div class="logo-container">
+        <span class="logo-text">Zh-Lens</span>
+        <span class="logo-dot"></span>
+      </div>
+      <div class="status-indicator-container">
+        <span id="status-badge" class="badge">Checking...</span>
+      </div>
+    </div>
+    
+    <div class="divider"></div>
+    
+    <!-- Loading State -->
+    <div id="state-loading" class="state-container hidden">
+      <div class="spinner-container">
+        <div class="spinner"></div>
+      </div>
+      <div class="progress-title">Optimizing Dictionary Database</div>
+      <div class="progress-bar-bg">
+        <div id="progress-bar" class="progress-bar-fill" style="width: 0%"></div>
+      </div>
+      <div id="progress-text" class="progress-percent">0%</div>
+      <div class="progress-info">Parsing CC-CEDICT. This happens only once and takes a few seconds.</div>
+    </div>
+
+    <!-- Ready State -->
+    <div id="state-ready" class="state-container hidden">
+      <div class="toggle-section">
+        <div class="toggle-label-container">
+          <span class="toggle-title">Assistant Active</span>
+          <span class="toggle-subtitle">Scan and annotate Chinese text</span>
+        </div>
+        <label class="switch">
+          <input type="checkbox" id="enable-toggle" checked>
+          <span class="slider"></span>
+        </label>
+      </div>
+
+      <div class="toggle-section" style="margin-top: 12px;">
+        <div class="toggle-label-container">
+          <span class="toggle-title">Show Pinyin</span>
+          <span class="toggle-subtitle">Show pinyin above Chinese characters</span>
+        </div>
+        <label class="switch">
+          <input type="checkbox" id="pinyin-toggle" checked>
+          <span class="slider"></span>
+        </label>
+      </div>
+
+      <div class="divider" style="margin: 14px 0;"></div>
+
+      <div class="instructions">
+        <div class="instruction-item">
+          <span class="icon">✨</span>
+          <span class="text">Word divisions and hovers are shown automatically.</span>
+        </div>
+        <div class="instruction-item">
+          <span class="icon">⌨️</span>
+          <span class="text">Hold <kbd>Alt</kbd> and hover a word to show translation tooltip.</span>
+        </div>
+        <div class="instruction-item">
+          <span class="icon">🔄</span>
+          <span class="text">Press <kbd>Alt + Q</kbd> to toggle Pinyin.</span>
+        </div>
+      </div>
+    </div>
+
+    <!-- Error State -->
+    <div id="state-error" class="state-container hidden">
+      <div class="error-icon">⚠️</div>
+      <div class="error-title">Database Seeding Failed</div>
+      <div id="error-message" class="error-msg">Ensure you ran the download script successfully.</div>
+      <button id="btn-retry" class="btn" style="margin-top: 8px; align-self: center;">Retry Setup</button>
+    </div>
+    
+    <div class="footer">
+      <span>Zh-Lens v1.0.0</span>
+      <span>•</span>
+      <a href="#" id="btn-reindex">Rebuild DB</a>
+    </div>
+  </div>
+
+  <script src="popup.js"></script>
+</body>
+</html>

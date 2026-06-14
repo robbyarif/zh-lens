@@ -1,0 +1,159 @@
+/* styles.css */
+/* Styles for Zh-Lens Chinese Reading Assistant */
+
+:root {
+  --zh-lens-primary: #10b981;        /* Modern emerald green */
+  --zh-lens-primary-hover: rgba(16, 185, 129, 0.08);
+  --zh-lens-border: rgba(16, 185, 129, 0.35); /* dashed underline */
+  --zh-lens-bg-dark: rgba(15, 23, 42, 0.95);  /* slate 900 */
+  --zh-lens-text-light: #f8fafc;     /* slate 50 */
+  --zh-lens-text-muted: #94a3b8;     /* slate 400 */
+  --zh-lens-pinyin-color: #059669;   /* dark emerald green for readable pinyin */
+}
+
+/* Ruby Character Container */
+ruby.zh-lens-word {
+  ruby-position: over;
+  -webkit-ruby-position: before;
+  border-bottom: 1px dashed var(--zh-lens-border);
+  padding-bottom: 1px;
+  margin: 0 1px;
+  cursor: help;
+  transition: border-color 0.2s, background-color 0.2s;
+  display: inline-inline; /* Keep it in text flow */
+}
+
+ruby.zh-lens-word:hover {
+  background-color: var(--zh-lens-primary-hover);
+  border-bottom-color: var(--zh-lens-primary);
+}
+
+/* Base Chinese Character Styling */
+ruby.zh-lens-word > rb {
+  font-family: system-ui, -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, "Helvetica Neue", Arial, sans-serif;
+  user-select: text;
+}
+
+/* Pinyin Text Styling */
+ruby.zh-lens-word > rt {
+  font-family: "Outfit", "Inter", system-ui, -apple-system, sans-serif;
+  font-size: 0.62em;
+  font-weight: 600;
+  color: var(--zh-lens-pinyin-color);
+  text-align: center;
+  user-select: none;
+  padding-bottom: 2px;
+  /* Allow it to display natively above character */
+}
+
+/* Pinyin Tone-Specific Colors (Based on Chinese through Tones and Color Scheme) */
+ruby.zh-lens-word > rt.zh-tone-1 {
+  color: #ef4444 !important; /* 1st tone: Red */
+}
+ruby.zh-lens-word > rt.zh-tone-2 {
+  color: #f97316 !important; /* 2nd tone: Orange */
+}
+ruby.zh-lens-word > rt.zh-tone-3 {
+  color: #22c55e !important; /* 3rd tone: Green */
+}
+ruby.zh-lens-word > rt.zh-tone-4 {
+  color: #3b82f6 !important; /* 4th tone: Blue */
+}
+ruby.zh-lens-word > rt.zh-tone-5 {
+  color: #64748b !important; /* 5th/neutral tone: Slate Gray */
+}
+
+/* Dark themed Glassmorphic Tooltip Overlay */
+#zh-lens-tooltip {
+  position: absolute;
+  z-index: 2147483647; /* Maximum possible z-index to stay on top of other web content */
+  background: var(--zh-lens-bg-dark);
+  backdrop-filter: blur(12px);
+  -webkit-backdrop-filter: blur(12px);
+  border: 1px solid rgba(255, 255, 255, 0.12);
+  border-radius: 12px;
+  padding: 14px 18px;
+  color: var(--zh-lens-text-light);
+  font-family: system-ui, -apple-system, sans-serif;
+  box-shadow: 0 10px 30px -5px rgba(0, 0, 0, 0.5), 0 8px 16px -8px rgba(0, 0, 0, 0.5);
+  width: max-content;
+  max-width: 340px;
+  pointer-events: none;
+  opacity: 0;
+  transform: translate(-50%, -100%) scale(0.95);
+  transition: opacity 0.12s ease-out, transform 0.12s ease-out;
+  line-height: 1.4;
+}
+
+/* Tooltip visible state */
+#zh-lens-tooltip.zh-lens-tooltip-visible {
+  opacity: 1;
+  transform: translate(-50%, -100%) scale(1);
+}
+
+/* Tooltip Content Elements */
+.zh-lens-tooltip-header {
+  display: flex;
+  align-items: baseline;
+  gap: 8px;
+  margin-bottom: 4px;
+}
+
+.zh-lens-tooltip-chars {
+  font-size: 1.45em;
+  font-weight: bold;
+  color: #34d399; /* Emerald 400 */
+  letter-spacing: 0.5px;
+}
+
+.zh-lens-tooltip-trad {
+  font-size: 0.85em;
+  color: var(--zh-lens-text-muted);
+}
+
+.zh-lens-tooltip-divider {
+  height: 1px;
+  background: rgba(255, 255, 255, 0.08);
+  margin: 10px 0;
+}
+
+.zh-lens-tooltip-reading {
+  margin-bottom: 10px;
+}
+
+.zh-lens-tooltip-reading:last-child {
+  margin-bottom: 0;
+}
+
+.zh-lens-tooltip-pinyin {
+  font-size: 0.92em;
+  font-weight: 700;
+  color: #f59e0b; /* Amber 500 for Pinyin */
+  margin-bottom: 2px;
+}
+
+.zh-lens-tooltip-defs {
+  padding-left: 18px;
+  margin: 4px 0 0 0;
+  color: #e2e8f0; /* slate 200 */
+  font-size: 0.82em;
+}
+
+.zh-lens-tooltip-defs > li {
+  margin-bottom: 2px;
+}
+
+.zh-lens-tooltip-defs > li:last-child {
+  margin-bottom: 0;
+}
+
+
+
+/* Pinyin Toggle Mode: Hide pinyin annotations but keep tooltips */
+body.zh-lens-pinyin-disabled ruby.zh-lens-word > rt {
+  display: none !important;
+}
+body.zh-lens-pinyin-disabled ruby.zh-lens-word {
+  ruby-position: initial;
+  -webkit-ruby-position: initial;
+}
