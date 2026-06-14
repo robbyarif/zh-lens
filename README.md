@@ -2,6 +2,17 @@
 
 Zh-Lens is a high-performance, production-ready Chrome Extension (Manifest V3) designed to assist users in reading, segmenting, and translating Chinese characters directly on any webpage. By wrapping Chinese text in interactive **Duolingo-style `<ruby>` structures** and querying a locally-stored CC-CEDICT dictionary via a background worker and IndexedDB, it delivers a smooth, native-feeling reading experience at 60 FPS.
 
+## 📸 Screenshots
+
+### 1. Pinyin Annotation
+![Pinyin Annotation](screenshots/pinyin_annotation.png)
+
+### 2. Dictionary Popup (Hold Alt)
+![Dictionary Popup](screenshots/dictionary_popup.png)
+
+### 3. Sentence Translation (Alt + Q)
+![Sentence Translation](screenshots/translation_mode.png)
+
 ---
 
 ## ✨ Features
