@@ -43,8 +43,10 @@ zh-lens/
 ├── background.js         # Service Worker (IndexedDB storage & query listener)
 ├── content.js            # Content script (DOM walker, event listeners, & segmentation)
 ├── styles.css            # Extension layout CSS (ruby styling, tooltips, transitions)
-├── download_dict.ps1     # Automation script to fetch and set up CC-CEDICT database
-├── package.ps1           # Build & packaging script for Web Store deployment
+├── download_dict.ps1     # Automation script to fetch CC-CEDICT database (Windows)
+├── download_dict.sh      # Automation script to fetch CC-CEDICT database (Linux/macOS)
+├── package.ps1           # Build & packaging script for Web Store (Windows)
+├── package.sh            # Build & packaging script for Web Store (Linux/macOS)
 ├── .gitignore            # Git exclusions
 ├── README.md             # Project documentation
 ├── dictionary/
@@ -66,10 +68,16 @@ zh-lens/
 ### 1. Setup the Dictionary
 Because the CC-CEDICT dictionary data is large (approx. 10MB), it is not checked into version control. You must download and prepare it first.
 
-Run the automated PowerShell setup script from the project root:
+**On Windows:**
 ```powershell
 .\download_dict.ps1
 ```
+
+**On Linux/macOS:**
+```bash
+./download_dict.sh
+```
+
 This script will:
 - Download the official UTF-8 CC-CEDICT zip archive.
 - Extract the files into the `dictionary/` directory.
@@ -87,8 +95,16 @@ This script will:
 ## 📦 Packaging for Production
 
 To package the extension into a Chrome Web Store-compliant deployment archive, run the build script:
+
+**On Windows:**
 ```powershell
 .\package.ps1
 ```
+
+**On Linux/macOS:**
+```bash
+./package.sh
+```
+
 This script cleans up workspace artifacts, creates a clean staging folder containing only runtime files, compresses the assets, and generates a production-ready package at:
 `zh-lens-production.zip`
