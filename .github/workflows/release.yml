@@ -1,0 +1,70 @@
+name: Release
+
+# Trigger: push a version tag, e.g.  git tag v0.1.0 && git push --tags
+on:
+  push:
+    tags:
+      - "v*"
+
+permissions:
+  contents: write # needed to create the GitHub Release
+
+jobs:
+  release:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Check out source
+        uses: actions/checkout@v4
+
+      - name: Verify tag matches manifest version
+        run: |
+          TAG_VERSION="${GITHUB_REF_NAME#v}"
+          MANIFEST_VERSION="$(jq -r .version manifest.json)"
+          echo "Tag version:      $TAG_VERSION"
+          echo "Manifest version: $MANIFEST_VERSION"
+          if [ "$TAG_VERSION" != "$MANIFEST_VERSION" ]; then
+            echo "::error::Tag ($TAG_VERSION) does not match manifest.json version ($MANIFEST_VERSION)."
+            exit 1
+          fi
+
+      - name: Download CC-CEDICT dictionary
+        run: |
+          mkdir -p dictionary
+          curl -sSL "https://www.mdbg.net/chinese/export/cedict/cedict_1_0_ts_utf-8_mdbg.zip" -o cedict.zip
+          unzip -o cedict.zip -d dictionary
+          # The extracted file is named cedict_ts.u8 — normalize to cedict.txt
+          mv "$(ls dictionary/*.u8 dictionary/*.txt 2>/dev/null | grep -v 'cedict.txt' | head -n1)" dictionary/cedict.txt
+          rm -f cedict.zip
+
+      - name: Build extension zip
+        run: |
+          STAGE=stage
+          ZIP="zh-lens-${GITHUB_REF_NAME}.zip"
+          rm -rf "$STAGE"
+          FILES=(
+            manifest.json
+            background.js
+            content.js
+            styles.css
+            dictionary/cedict.txt
+            popup/popup.html
+            popup/popup.css
+            popup/popup.js
+            icons
+          )
+          for f in "${FILES[@]}"; do
+            mkdir -p "$STAGE/$(dirname "$f")"
+            cp -r "$f" "$STAGE/$f"
+          done
+          (cd "$STAGE" && zip -r "../$ZIP" .)
+          rm -rf "$STAGE"
+          echo "ZIP_NAME=$ZIP" >> "$GITHUB_ENV"
+
+      - name: Create GitHub Release
+        uses: softprops/action-gh-release@v2
+        with:
+          name: ${{ github.ref_name }}
+          files: ${{ env.ZIP_NAME }}
+          generate_release_notes: true
+          # Pre-1.0 tags (v0.x.x) are marked as pre-release automatically
+          prerelease: ${{ startsWith(github.ref_name, 'v0.') }}
