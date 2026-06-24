@@ -65,7 +65,30 @@ zh-lens/
 
 ## 🚀 Setup & Installation
 
-### 1. Setup the Dictionary
+> **Just want to use it?** Follow **Option A** to install a pre-built release.
+> **Want to develop or build from source?** Skip to **Option B**.
+
+---
+
+### Option A: Install from a Release (Recommended)
+
+Zh-Lens is currently in **beta** and not yet on the Chrome Web Store, so you install it manually from a packaged release. The release archive already bundles the CC-CEDICT dictionary — no separate download needed.
+
+1. Go to the [**Releases**](https://github.com/robbyarif/zh-lens/releases) page and download the `zh-lens-vX.Y.Z.zip` asset from the latest release.
+2. **Unzip** the archive into a folder you'll keep (Chrome loads the extension from this folder, so don't delete it afterward).
+3. Open Google Chrome and navigate to `chrome://extensions/`.
+4. Enable **Developer mode** using the toggle switch in the top-right corner.
+5. Click **Load unpacked** in the top-left corner.
+6. Select the **unzipped folder** (the directory containing `manifest.json`).
+7. The extension will initialize and seed the dictionary into IndexedDB. Click the extension icon to view the seeding progress bar.
+
+> **Updating:** When a new release is published, download and unzip the new version over the same folder (or into a fresh one), then click the refresh ↻ icon on the Zh-Lens card in `chrome://extensions/`.
+
+---
+
+### Option B: Build from Source (Developers)
+
+#### 1. Setup the Dictionary
 Because the CC-CEDICT dictionary data is large (approx. 10MB), it is not checked into version control. You must download and prepare it first.
 
 **On Windows:**
@@ -83,7 +106,7 @@ This script will:
 - Extract the files into the `dictionary/` directory.
 - Rename the extracted dictionary file to `cedict.txt`.
 
-### 2. Install in Google Chrome
+#### 2. Install in Google Chrome
 1. Open Google Chrome and navigate to `chrome://extensions/`.
 2. Enable **Developer mode** using the toggle switch in the top-right corner.
 3. Click **Load unpacked** in the top-left corner.
