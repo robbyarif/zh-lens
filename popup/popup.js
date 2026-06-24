@@ -56,13 +56,69 @@ function updateUI() {
 
 const pinyinToggle = document.getElementById('pinyin-toggle');
 const translationToggle = document.getElementById('translation-toggle');
+const engineSelect = document.getElementById('engine-select');
+const translationProgress = document.getElementById('translation-progress');
+const translationProgressBar = document.getElementById('translation-progress-bar');
+const translationProgressPercent = document.getElementById('translation-progress-percent');
+const rateLimitNotice = document.getElementById('translation-ratelimit');
+const rateLimitLink = document.getElementById('ratelimit-link');
 
 // Load current settings
-chrome.storage.local.get({ enabled: true, pinyinEnabled: true, translationMode: false }, (settings) => {
+chrome.storage.local.get({ enabled: true, pinyinEnabled: true, translationMode: false, translationEngine: 'auto' }, (settings) => {
   enableToggle.checked = settings.enabled;
   pinyinToggle.checked = settings.pinyinEnabled;
   translationToggle.checked = settings.translationMode;
+  engineSelect.value = settings.translationEngine;
 });
+
+// Persist the chosen translation engine; content scripts react via storage.
+engineSelect.addEventListener('change', () => {
+  chrome.storage.local.set({ translationEngine: engineSelect.value });
+});
+
+// Poll the active tab's content script for translation progress and render the
+// loading bar / verification notice accordingly.
+function pollTranslationStatus() {
+  chrome.tabs.query({ active: true, currentWindow: true }, (tabs) => {
+    const tab = tabs && tabs[0];
+    if (!tab || tab.id == null) {
+      renderTranslationStatus(null);
+      return;
+    }
+    chrome.tabs.sendMessage(tab.id, { type: 'GET_TRANSLATION_STATUS' }, (resp) => {
+      // lastError fires on pages without our content script (chrome://, store).
+      if (chrome.runtime.lastError || !resp) {
+        renderTranslationStatus(null);
+        return;
+      }
+      renderTranslationStatus(resp);
+    });
+  });
+}
+
+function renderTranslationStatus(status) {
+  if (!status) {
+    translationProgress.classList.add('hidden');
+    rateLimitNotice.classList.add('hidden');
+    return;
+  }
+
+  if (status.rateLimited && status.verificationUrl) {
+    rateLimitLink.href = status.verificationUrl;
+    rateLimitNotice.classList.remove('hidden');
+  } else {
+    rateLimitNotice.classList.add('hidden');
+  }
+
+  if (status.active) {
+    const pct = status.total > 0 ? Math.round((status.done / status.total) * 100) : 0;
+    translationProgressBar.style.width = `${pct}%`;
+    translationProgressPercent.textContent = `${pct}%`;
+    translationProgress.classList.remove('hidden');
+  } else {
+    translationProgress.classList.add('hidden');
+  }
+}
 
 // Update settings on toggle
 enableToggle.addEventListener('change', () => {
@@ -106,6 +162,9 @@ chrome.storage.onChanged.addListener((changes) => {
   if (changes.translationMode) {
     translationToggle.checked = changes.translationMode.newValue;
   }
+  if (changes.translationEngine) {
+    engineSelect.value = changes.translationEngine.newValue;
+  }
 });
 
 // Retry Setup click handler
@@ -128,7 +187,11 @@ btnReindex.addEventListener('click', (e) => {
 
 // Initial query and polling
 updateUI();
-const pollInterval = setInterval(updateUI, 800);
+pollTranslationStatus();
+const pollInterval = setInterval(() => {
+  updateUI();
+  pollTranslationStatus();
+}, 800);
 
 // Cleanup polling when popup closes
 window.addEventListener('unload', () => {

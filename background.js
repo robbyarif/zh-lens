@@ -273,19 +273,42 @@ async function handleSegmentBatch(texts) {
   return result;
 }
 
-// Google Translate API Integration
+// Google Translate (gtx) API Integration.
+// Fallback path only: content.js uses Chrome's built-in Translator API as the
+// primary translator and calls TRANSLATE_BATCH here when that API is
+// unavailable (Chrome <138, mobile, model not downloaded, or unsupported pair).
+// Page the user is sent to in order to complete Google's human-verification
+// (reCAPTCHA) when the gtx endpoint rejects automated queries. Solving it
+// clears the block for the user's IP so translation can resume.
+const GTX_VERIFICATION_URL = 'https://www.google.com/sorry/index?continue=https://translate.googleapis.com/';
+
 async function translateChunk(chunk, targetLang) {
   const joinedText = chunk.join('\n');
   const url = `https://translate.googleapis.com/translate_a/single?client=gtx&sl=zh-CN&tl=${targetLang}&dt=t&q=${encodeURIComponent(joinedText)}`;
   const results = [];
 
+  let response;
   try {
-    const response = await fetch(url);
-    if (!response.ok) {
-      console.warn(`Translation chunk failed with status: ${response.status}`);
-      return [];
-    }
+    response = await fetch(url);
+  } catch (error) {
+    console.warn('Error during translation chunk fetch:', error);
+    return [];
+  }
 
+  if (!response.ok) {
+    // 403/429 means Google flagged the traffic as automated and wants the user
+    // to solve a captcha. Propagate so content.js can surface the link.
+    if (response.status === 403 || response.status === 429) {
+      const e = new Error(`Google Translate verification required (HTTP ${response.status})`);
+      e.code = 'RATE_LIMITED';
+      e.status = response.status;
+      throw e;
+    }
+    console.warn(`Translation chunk failed with status: ${response.status}`);
+    return [];
+  }
+
+  try {
     const data = await response.json();
     if (data && data[0]) {
       data[0].forEach(item => {
@@ -302,7 +325,7 @@ async function translateChunk(chunk, targetLang) {
       });
     }
   } catch (error) {
-    console.warn('Error during translation chunk fetch:', error);
+    console.warn('Error parsing translation chunk response:', error);
   }
 
   return results;
@@ -349,7 +372,18 @@ chrome.runtime.onMessage.addListener((message, sender, sendResponse) => {
   if (message.type === 'TRANSLATE_BATCH') {
     translateTexts(message.texts)
       .then(result => sendResponse({ success: true, result }))
-      .catch(err => sendResponse({ success: false, error: err.message }));
+      .catch(err => {
+        if (err && err.code === 'RATE_LIMITED') {
+          sendResponse({
+            success: false,
+            rateLimited: true,
+            status: err.status,
+            verificationUrl: GTX_VERIFICATION_URL
+          });
+        } else {
+          sendResponse({ success: false, error: err.message });
+        }
+      });
     return true;
   }
 

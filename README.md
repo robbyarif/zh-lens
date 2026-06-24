@@ -13,6 +13,8 @@ Zh-Lens is a high-performance, production-ready Chrome Extension (Manifest V3) d
 ### 3. Sentence Translation (Alt + Q)
 ![Sentence Translation](screenshots/translation_mode.png)
 
+> Sentence translation uses Chrome's on-device **[Translator API](https://developer.chrome.com/docs/ai/translator-api)** (Chrome 138+ desktop) for fully local, official translation. On builds where the API is unavailable, it automatically falls back to the legacy gtx endpoint.
+
 ---
 
 ## ✨ Features

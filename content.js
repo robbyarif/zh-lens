@@ -9,6 +9,26 @@ let isTranslationMode = false;
 let isPinyinEnabled = true;
 const translationCache = new Map();
 
+// Built-in Chrome Translator API (chrome://flags + Chrome 138+ desktop).
+// Runs only in window contexts (not the service worker), so the primary
+// translation path lives here in the content script. Falls back to the gtx
+// API in background.js when the built-in API is unavailable or not ready.
+const TRANSLATOR_SOURCE_LANG = 'zh';
+const TRANSLATOR_TARGET_LANG = 'en';
+let translatorPromise = null;
+let translatorUnavailable = false;
+
+// Which translation engine the user has selected in the popup:
+//   'auto'    - built-in Translator API, falling back to gtx (default)
+//   'builtin' - Chrome's built-in Translator API only
+//   'google'  - Google Translate (gtx) endpoint only
+let translationEngine = 'auto';
+
+// Live translation progress, polled by the popup to render its loading bar.
+// `total`/`done` drive a determinate bar; `rateLimited` surfaces the gtx
+// verification link both in-page and in the popup.
+let translationStatus = { active: false, done: 0, total: 0, rateLimited: false, verificationUrl: null };
+
 // Debouncing mechanism for MutationObserver
 let scanTimeout = null;
 let pendingNodesToScan = [];
@@ -103,6 +123,128 @@ function groupSegmentsIntoSentences(segments) {
   return sentences;
 }
 
+// Lazily create (and cache) a built-in Translator instance. Returns null when
+// the API is missing, the language pair is unsupported, or creation fails
+// (e.g. model not yet downloaded and no user activation). A transient failure
+// resets the cache so a later attempt — typically after a user gesture — can
+// retry; a permanent failure latches translatorUnavailable so we stop trying.
+async function getBuiltInTranslator() {
+  if (translatorUnavailable) return null;
+  if (translatorPromise) return translatorPromise;
+  if (typeof Translator === 'undefined') {
+    translatorUnavailable = true;
+    return null;
+  }
+
+  const attempt = (async () => {
+    const availability = await Translator.availability({
+      sourceLanguage: TRANSLATOR_SOURCE_LANG,
+      targetLanguage: TRANSLATOR_TARGET_LANG,
+    });
+    // 'unsupported'/'unavailable' means this build can never serve the pair.
+    if (availability !== 'available' && availability !== 'downloadable' && availability !== 'downloading') {
+      translatorUnavailable = true;
+      return null;
+    }
+
+    // When the model still needs downloading, Translator.create() requires
+    // transient user activation. Our auto/storage-driven path has none, so
+    // creating would reject with a DOMException — bail out cleanly and let gtx
+    // handle this run. A later gesture (e.g. the Alt+Q hotkey) retries with
+    // activation present, which is what actually kicks off the download.
+    const needsDownload = availability !== 'available';
+    if (needsDownload && !navigator.userActivation?.isActive) {
+      throw new Error('built-in model needs download; deferring until a user gesture');
+    }
+
+    return Translator.create({
+      sourceLanguage: TRANSLATOR_SOURCE_LANG,
+      targetLanguage: TRANSLATOR_TARGET_LANG,
+      monitor(m) {
+        m.addEventListener('downloadprogress', (e) => {
+          console.log(`Zh-Lens: translation model downloading ${Math.round(e.loaded * 100)}%`);
+        });
+      },
+    });
+  })();
+
+  translatorPromise = attempt.catch((error) => {
+    // DOMException stringifies to a useless "[object DOMException]" — log its
+    // name/message so the real reason (NotAllowedError, NotSupportedError, …)
+    // is visible.
+    const detail = error instanceof DOMException ? `${error.name}: ${error.message}` : error;
+    console.warn('Zh-Lens: Built-in Translator unavailable, using gtx fallback.', detail);
+    translatorPromise = null; // allow a later retry (e.g. after user activation)
+    return null;
+  });
+
+  return translatorPromise;
+}
+
+// Translate a batch with the built-in API. Returns an array of
+// { source, translated } items, or null to signal the caller to fall back.
+// `onProgress` is invoked after each sentence so the popup loading bar can
+// advance while a long page is processed.
+async function translateWithBuiltIn(texts, onProgress) {
+  const translator = await getBuiltInTranslator();
+  if (!translator) return null;
+
+  const results = [];
+  // The Translator API processes calls sequentially, so awaiting in a loop
+  // is no slower than firing them concurrently and is easier to reason about.
+  for (const text of texts) {
+    try {
+      const translated = await translator.translate(text);
+      if (translated) {
+        results.push({ source: text, translated: translated.trim() });
+      }
+    } catch (error) {
+      console.warn('Zh-Lens: Built-in translate() failed for a sentence.', error);
+    }
+    if (onProgress) onProgress();
+  }
+  return results;
+}
+
+// Translate a batch via the gtx endpoint in the background service worker.
+// Surfaces a verification link to the user when Google rate-limits the request.
+async function translateWithGtx(texts) {
+  const response = await chrome.runtime.sendMessage({
+    type: 'TRANSLATE_BATCH',
+    texts
+  });
+  if (response && response.success && response.result) {
+    return response.result;
+  }
+  if (response && response.rateLimited) {
+    setRateLimited(response.verificationUrl, response.status);
+  }
+  return [];
+}
+
+// Pick the translation path based on the user's engine preference. Returns an
+// array of { source, translated } items (possibly empty).
+async function translateBatch(texts, onProgress) {
+  if (translationEngine === 'google') {
+    const gtx = await translateWithGtx(texts);
+    if (onProgress) texts.forEach(onProgress);
+    return gtx;
+  }
+
+  if (translationEngine === 'builtin') {
+    const builtIn = await translateWithBuiltIn(texts, onProgress);
+    return builtIn === null ? [] : builtIn;
+  }
+
+  // 'auto': built-in first, gtx as fallback when it is unavailable/not ready.
+  let resultItems = await translateWithBuiltIn(texts, onProgress);
+  if (resultItems === null) {
+    resultItems = await translateWithGtx(texts);
+    if (onProgress) texts.forEach(onProgress);
+  }
+  return resultItems;
+}
+
 // Fetch translations for sentences on the page in a single batch
 async function translatePageSentences() {
   if (!chrome.runtime?.id) {
@@ -124,37 +266,96 @@ async function translatePageSentences() {
     return;
   }
 
+  // Begin a fresh progress run for the popup loading bar.
+  translationStatus = {
+    active: true,
+    done: 0,
+    total: textsToTranslate.length,
+    rateLimited: false,
+    verificationUrl: null,
+  };
+  const onProgress = () => { translationStatus.done++; };
+
   try {
-    const response = await chrome.runtime.sendMessage({
-      type: 'TRANSLATE_BATCH',
-      texts: textsToTranslate
+    const resultItems = await translateBatch(textsToTranslate, onProgress);
+
+    const responseMap = new Map();
+    resultItems.forEach(item => {
+      if (item.source && item.translated) {
+        responseMap.set(item.source, item.translated);
+      }
     });
 
-    if (response && response.success && response.result) {
-      const responseMap = new Map();
-      response.result.forEach(item => {
-        if (item.source && item.translated) {
-          responseMap.set(item.source, item.translated);
-        }
-      });
+    textsToTranslate.forEach((originalText, index) => {
+      let translation = responseMap.get(originalText);
+      // Fallback to index-based matching
+      if (!translation && resultItems[index]) {
+        translation = resultItems[index].translated;
+      }
 
-      textsToTranslate.forEach((originalText, index) => {
-        let translation = responseMap.get(originalText);
-        // Fallback to index-based matching
-        if (!translation && response.result[index]) {
-          translation = response.result[index].translated;
-        }
+      if (translation) {
+        translationCache.set(originalText, translation);
+      }
+    });
 
-        if (translation) {
-          translationCache.set(originalText, translation);
-        }
-      });
-
-      applyTranslationsFromCache();
-    }
+    applyTranslationsFromCache();
   } catch (error) {
     console.warn('Zh-Lens: Batch translation failed.', error);
+  } finally {
+    translationStatus.active = false;
   }
+}
+
+// Record a gtx rate-limit / verification request and surface it to the user via
+// an in-page banner. The popup reads the same `translationStatus` to mirror it.
+function setRateLimited(verificationUrl, status) {
+  const url = verificationUrl || 'https://www.google.com/sorry/index';
+  translationStatus.rateLimited = true;
+  translationStatus.verificationUrl = url;
+  showRateLimitBanner(url, status);
+}
+
+// In-page banner prompting the user to complete Google's human-verification so
+// the gtx endpoint resumes serving translations.
+function showRateLimitBanner(url, status) {
+  if (document.getElementById('zh-lens-rate-limit')) return;
+
+  const banner = document.createElement('div');
+  banner.id = 'zh-lens-rate-limit';
+
+  const text = document.createElement('span');
+  text.className = 'zh-lens-rate-limit-text';
+  text.textContent = status
+    ? `Google Translate needs verification (HTTP ${status}).`
+    : 'Google Translate needs verification.';
+
+  const link = document.createElement('a');
+  link.className = 'zh-lens-rate-limit-link';
+  link.href = url;
+  link.target = '_blank';
+  link.rel = 'noopener noreferrer';
+  link.textContent = 'Verify, then retry';
+  link.addEventListener('click', () => {
+    // Give the user a moment to solve the challenge, then re-attempt.
+    setTimeout(() => {
+      const b = document.getElementById('zh-lens-rate-limit');
+      if (b) b.remove();
+      translationStatus.rateLimited = false;
+      translationStatus.verificationUrl = null;
+      if (isTranslationMode) translatePageSentences();
+    }, 1500);
+  });
+
+  const close = document.createElement('button');
+  close.className = 'zh-lens-rate-limit-close';
+  close.setAttribute('aria-label', 'Dismiss');
+  close.textContent = '×';
+  close.addEventListener('click', () => banner.remove());
+
+  banner.appendChild(text);
+  banner.appendChild(link);
+  banner.appendChild(close);
+  document.body.appendChild(banner);
 }
 
 // Match ellipsis at the end of the original text
@@ -649,13 +850,19 @@ chrome.runtime.onMessage.addListener((message, sender, sendResponse) => {
     }
     if (sendResponse) sendResponse({ success: true, isTranslationMode, isPinyinEnabled });
   }
+
+  // Popup polls this to render its translation loading bar / verification link.
+  if (message.type === 'GET_TRANSLATION_STATUS') {
+    sendResponse({ ...translationStatus, isTranslationMode });
+  }
 });
 
 // Initialize Extension Settings
-chrome.storage.local.get({ enabled: true, pinyinEnabled: true, translationMode: false }, (settings) => {
+chrome.storage.local.get({ enabled: true, pinyinEnabled: true, translationMode: false, translationEngine: 'auto' }, (settings) => {
   isEnabled = settings.enabled;
   isPinyinEnabled = settings.pinyinEnabled;
   isTranslationMode = settings.translationMode;
+  translationEngine = settings.translationEngine;
   if (isEnabled) {
     if (document.readyState === 'loading') {
       document.addEventListener('DOMContentLoaded', onPageLoad);
@@ -682,7 +889,29 @@ chrome.storage.onChanged.addListener((changes) => {
   if (changes.pinyinEnabled) {
     togglePinyinMode(changes.pinyinEnabled.newValue);
   }
+  if (changes.translationEngine) {
+    translationEngine = changes.translationEngine.newValue;
+    // Give the newly chosen engine a fresh attempt (the built-in latch may have
+    // tripped under 'auto') and re-translate the visible page with it.
+    translatorUnavailable = false;
+    translatorPromise = null;
+    if (isTranslationMode) {
+      translationCache.clear();
+      clearTranslationsInDom();
+      translatePageSentences();
+    }
+  }
 });
+
+// Clear rendered sentence translations so a re-translate (e.g. after switching
+// engines) repopulates them from scratch.
+function clearTranslationsInDom() {
+  document.querySelectorAll('.zh-lens-sentence').forEach(elem => {
+    const transSpan = elem.querySelector('.zh-lens-sentence-translated-text');
+    if (transSpan) transSpan.textContent = '';
+    elem.removeAttribute('data-translated');
+  });
+}
 
 function onPageLoad() {
   scanAndProcessNodes([document.body]).then(() => {

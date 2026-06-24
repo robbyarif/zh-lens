@@ -66,6 +66,38 @@
         </label>
       </div>
 
+      <div class="toggle-section" style="margin-top: 12px;">
+        <div class="toggle-label-container">
+          <span class="toggle-title">Translation Engine</span>
+          <span class="toggle-subtitle">Which translator to use</span>
+        </div>
+        <select id="engine-select" class="engine-select">
+          <option value="auto">Auto (built-in → Google)</option>
+          <option value="builtin">Chrome built-in</option>
+          <option value="google">Google Translate</option>
+        </select>
+      </div>
+
+      <!-- Translation progress (shown while a page is being translated) -->
+      <div id="translation-progress" class="translation-progress hidden">
+        <div class="translation-progress-label">
+          <span>Translating…</span>
+          <span id="translation-progress-percent">0%</span>
+        </div>
+        <div class="progress-bar-bg">
+          <div id="translation-progress-bar" class="progress-bar-fill" style="width: 0%"></div>
+        </div>
+      </div>
+
+      <!-- gtx rate-limit / verification notice -->
+      <div id="translation-ratelimit" class="ratelimit-notice hidden">
+        <span class="ratelimit-icon">🤖</span>
+        <div class="ratelimit-body">
+          <span class="ratelimit-text">Google Translate needs human verification.</span>
+          <a id="ratelimit-link" href="#" target="_blank" rel="noopener noreferrer">Verify on Google →</a>
+        </div>
+      </div>
+
       <div class="divider" style="margin: 14px 0;"></div>
 
       <div class="instructions">
