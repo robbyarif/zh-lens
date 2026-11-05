@@ -26,5 +26,8 @@ stage/
 /dictionary/cedict.txt
 /dictionary/cedict.zip
 
+# OCR runtime + Chinese model (Downloaded using download_ocr.ps1 / download_ocr.sh)
+/ocr/
+
 # Agent and Prompt Instruction files
 gemini-code-*.md

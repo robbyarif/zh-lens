@@ -36,6 +36,9 @@ jobs:
           mv "$(ls dictionary/*.u8 dictionary/*.txt 2>/dev/null | grep -v 'cedict.txt' | head -n1)" dictionary/cedict.txt
           rm -f cedict.zip
 
+      - name: Download OCR runtime and Chinese model
+        run: bash download_ocr.sh
+
       - name: Build extension zip
         run: |
           STAGE=stage
@@ -47,6 +50,8 @@ jobs:
             content.js
             styles.css
             dictionary/cedict.txt
+            offscreen
+            ocr
             popup/popup.html
             popup/popup.css
             popup/popup.js

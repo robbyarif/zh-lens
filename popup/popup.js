@@ -57,6 +57,7 @@ function updateUI() {
 const pinyinToggle = document.getElementById('pinyin-toggle');
 const translationToggle = document.getElementById('translation-toggle');
 const engineSelect = document.getElementById('engine-select');
+const ocrScriptSelect = document.getElementById('ocr-script-select');
 const translationProgress = document.getElementById('translation-progress');
 const translationProgressBar = document.getElementById('translation-progress-bar');
 const translationProgressPercent = document.getElementById('translation-progress-percent');
@@ -71,9 +72,19 @@ chrome.storage.local.get({ enabled: true, pinyinEnabled: true, translationMode: 
   engineSelect.value = settings.translationEngine;
 });
 
+// OCR script: Traditional (chi_tra) is the default; the offscreen engine reads
+// this on each image, so no reload is needed.
+chrome.storage.local.get({ ocrScript: 'chi_tra' }, (settings) => {
+  ocrScriptSelect.value = settings.ocrScript;
+});
+
 // Persist the chosen translation engine; content scripts react via storage.
 engineSelect.addEventListener('change', () => {
   chrome.storage.local.set({ translationEngine: engineSelect.value });
+});
+
+ocrScriptSelect.addEventListener('change', () => {
+  chrome.storage.local.set({ ocrScript: ocrScriptSelect.value });
 });
 
 // Poll the active tab's content script for translation progress and render the
@@ -164,6 +175,9 @@ chrome.storage.onChanged.addListener((changes) => {
   }
   if (changes.translationEngine) {
     engineSelect.value = changes.translationEngine.newValue;
+  }
+  if (changes.ocrScript) {
+    ocrScriptSelect.value = changes.ocrScript.newValue;
   }
 });
 
