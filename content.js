@@ -855,6 +855,11 @@ chrome.runtime.onMessage.addListener((message, sender, sendResponse) => {
   if (message.type === 'GET_TRANSLATION_STATUS') {
     sendResponse({ ...translationStatus, isTranslationMode });
   }
+
+  // Context menu "Overlay Chinese text (OCR)" on an image.
+  if (message.type === 'OCR_START') {
+    runImageOcr(message.srcUrl);
+  }
 });
 
 // Initialize Extension Settings
@@ -926,6 +931,204 @@ function onPageLoad() {
   });
   startObserver();
   setupEventListeners();
+}
+
+// ---------------------------------------------------------------------------
+// OCR overlay: recognize Chinese text in an image and draw the hanzi over the
+// image at each recognized word's position. Recognition happens in the
+// background/offscreen OCR engine; this file only renders the result.
+// ---------------------------------------------------------------------------
+
+const HANZI_PATTERN = /[一-龥]/;
+const OCR_MIN_CONFIDENCE = 30; // Tesseract confidence (0-100); lower reads are dropped
+const ocrOverlays = new Map(); // HTMLImageElement -> overlay state
+let lastContextImage = null;
+let ocrLayoutListenersAttached = false;
+
+// Remember which image the user right-clicked, since the context menu event
+// only reports the image URL.
+document.addEventListener('contextmenu', (e) => {
+  lastContextImage = e.target instanceof HTMLImageElement ? e.target : null;
+}, true);
+
+function findImageForOcr(srcUrl) {
+  if (lastContextImage && (lastContextImage.currentSrc === srcUrl || lastContextImage.src === srcUrl)) {
+    return lastContextImage;
+  }
+  return Array.from(document.images).find(img => img.currentSrc === srcUrl || img.src === srcUrl) || null;
+}
+
+// Create (or reset) the overlay for an image. The layer lives on <html> with
+// absolute page coordinates so it is unaffected by the page's body styles.
+function getOcrOverlay(img) {
+  let overlay = ocrOverlays.get(img);
+  if (overlay) {
+    overlay.boxLayer.replaceChildren();
+    overlay.boxes = [];
+    return overlay;
+  }
+
+  const layer = document.createElement('div');
+  layer.className = 'zh-lens-ocr-layer';
+
+  const bar = document.createElement('div');
+  bar.className = 'zh-lens-ocr-bar';
+  const status = document.createElement('span');
+  status.className = 'zh-lens-ocr-status';
+  const close = document.createElement('button');
+  close.className = 'zh-lens-ocr-close';
+  close.setAttribute('aria-label', 'Remove Chinese text overlay');
+  close.textContent = '×';
+  close.addEventListener('click', () => removeOcrOverlay(img));
+  bar.append(status, close);
+
+  const boxLayer = document.createElement('div');
+  boxLayer.className = 'zh-lens-ocr-boxes';
+
+  layer.append(bar, boxLayer);
+  document.documentElement.appendChild(layer);
+
+  overlay = { img, layer, bar, status, boxLayer, boxes: [], naturalWidth: 0, naturalHeight: 0 };
+  ocrOverlays.set(img, overlay);
+
+  if (!ocrLayoutListenersAttached) {
+    ocrLayoutListenersAttached = true;
+    // Capture-phase scroll catches scrolling inside nested containers too.
+    window.addEventListener('scroll', repositionAllOcrOverlays, { capture: true, passive: true });
+    window.addEventListener('resize', repositionAllOcrOverlays, { passive: true });
+  }
+  return overlay;
+}
+
+function removeOcrOverlay(img) {
+  const overlay = ocrOverlays.get(img);
+  if (!overlay) return;
+  overlay.layer.remove();
+  ocrOverlays.delete(img);
+}
+
+function repositionAllOcrOverlays() {
+  for (const overlay of Array.from(ocrOverlays.values())) {
+    layoutOcrOverlay(overlay);
+  }
+}
+
+// Align the layer with the image and scale each recognized box from the
+// image's natural pixel grid to its displayed size.
+function layoutOcrOverlay(overlay) {
+  const { img, layer } = overlay;
+  if (!img.isConnected) {
+    removeOcrOverlay(img);
+    return;
+  }
+
+  const rect = img.getBoundingClientRect();
+  layer.style.left = `${rect.left + window.scrollX}px`;
+  layer.style.top = `${rect.top + window.scrollY}px`;
+  layer.style.width = `${rect.width}px`;
+  layer.style.height = `${rect.height}px`;
+
+  const scaleX = overlay.naturalWidth ? rect.width / overlay.naturalWidth : 1;
+  const scaleY = overlay.naturalHeight ? rect.height / overlay.naturalHeight : 1;
+
+  for (const box of overlay.boxes) {
+    const { bbox, el, charCount } = box;
+    const width = (bbox.x1 - bbox.x0) * scaleX;
+    const height = (bbox.y1 - bbox.y0) * scaleY;
+    el.style.left = `${bbox.x0 * scaleX}px`;
+    el.style.top = `${bbox.y0 * scaleY}px`;
+    el.style.width = `${width}px`;
+    el.style.height = `${height}px`;
+    // Fit the hanzi inside the box: limited by its height and by its width per character.
+    el.style.fontSize = `${Math.max(6, Math.min(height * 0.85, width / charCount))}px`;
+  }
+}
+
+// Build one overlay box. Chinese segments get the same tooltip data attributes
+// as page annotations, so Alt+hover shows the dictionary entry.
+function buildOcrBox(segments) {
+  const box = document.createElement('div');
+  box.className = 'zh-lens-ocr-box';
+
+  for (const seg of segments) {
+    if (seg.isChinese) {
+      const ruby = document.createElement('ruby');
+      ruby.className = 'zh-lens-word zh-lens-ocr-word';
+      const rb = document.createElement('rb');
+      rb.textContent = seg.word;
+      ruby.appendChild(rb);
+
+      const readings = seg.entry?.readings || [];
+      ruby.setAttribute('data-simplified', seg.entry?.simplified || seg.word);
+      ruby.setAttribute('data-traditional', seg.entry?.traditional || '');
+      ruby.setAttribute('data-readings', JSON.stringify(readings));
+      box.appendChild(ruby);
+    } else {
+      box.appendChild(document.createTextNode(seg.word));
+    }
+  }
+  return box;
+}
+
+async function runImageOcr(srcUrl) {
+  if (!chrome.runtime?.id) return;
+
+  const img = findImageForOcr(srcUrl);
+  if (!img) return;
+
+  const overlay = getOcrOverlay(img);
+  overlay.status.textContent = 'Recognizing Chinese text…';
+  overlay.status.classList.remove('zh-lens-ocr-error');
+  layoutOcrOverlay(overlay);
+
+  let response;
+  try {
+    response = await chrome.runtime.sendMessage({ type: 'OCR_RECOGNIZE', srcUrl });
+  } catch (error) {
+    response = { success: false, error: error.message };
+  }
+
+  // The user closed the overlay or re-ran OCR on another image meanwhile.
+  if (ocrOverlays.get(img) !== overlay) return;
+
+  if (!response || !response.success) {
+    overlay.status.textContent = `OCR failed: ${response?.error || 'no response'}`;
+    overlay.status.classList.add('zh-lens-ocr-error');
+    return;
+  }
+
+  overlay.naturalWidth = response.width;
+  overlay.naturalHeight = response.height;
+
+  const items = response.words
+    .filter(w => w.bbox && w.text && (w.confidence ?? 100) >= OCR_MIN_CONFIDENCE)
+    .map(w => ({ text: w.text.replace(/\s+/g, ''), bbox: w.bbox }))
+    .filter(w => HANZI_PATTERN.test(w.text));
+
+  if (items.length === 0) {
+    overlay.status.textContent = 'No Chinese text found in this image.';
+    return;
+  }
+
+  // Dictionary lookup for each recognized word (same path as page annotations).
+  let segmented = null;
+  try {
+    const lookup = await chrome.runtime.sendMessage({ type: 'SEGMENT_BATCH', texts: items.map(i => i.text) });
+    if (lookup?.success) segmented = lookup.result;
+  } catch (error) {
+    console.warn('Zh-Lens: dictionary lookup for OCR text failed.', error);
+  }
+
+  for (let i = 0; i < items.length; i++) {
+    const item = items[i];
+    const segments = segmented?.[i] || [{ word: item.text, isChinese: true, entry: null }];
+    const el = buildOcrBox(segments);
+    overlay.boxLayer.appendChild(el);
+    overlay.boxes.push({ el, bbox: item.bbox, charCount: Math.max(1, Array.from(item.text).length) });
+  }
+
+  overlay.status.textContent = `${items.length} Chinese block${items.length === 1 ? '' : 's'} · Alt+hover for definitions`;
+  layoutOcrOverlay(overlay);
 }
 
 // Tone-Mark Pinyin Conversion Helpers

@@ -360,8 +360,60 @@ async function translateTexts(texts, targetLang = 'en') {
   return results;
 }
 
+// OCR (image text recognition)
+// Tesseract runs in an offscreen document because a service worker cannot
+// spawn the Web Workers it needs. Created on demand and reused across images.
+const OCR_MENU_ID = 'zh-lens-ocr-image';
+const OFFSCREEN_URL = 'offscreen/offscreen.html';
+let offscreenCreating = null;
+
+async function ensureOffscreenDocument() {
+  if (await chrome.offscreen.hasDocument()) return;
+  if (!offscreenCreating) {
+    offscreenCreating = chrome.offscreen.createDocument({
+      url: OFFSCREEN_URL,
+      reasons: [chrome.offscreen.Reason.WORKERS],
+      justification: 'Run Tesseract.js OCR in a worker to recognize Chinese text in images.',
+    }).finally(() => { offscreenCreating = null; });
+  }
+  await offscreenCreating;
+}
+
+// Chinese script models bundled in ocr/lang (see download_ocr.*).
+const OCR_SCRIPTS = ['chi_tra', 'chi_sim'];
+
+async function recognizeImage(srcUrl) {
+  const { ocrScript } = await chrome.storage.local.get({ ocrScript: 'chi_tra' });
+  const lang = OCR_SCRIPTS.includes(ocrScript) ? ocrScript : 'chi_tra';
+
+  await ensureOffscreenDocument();
+  const response = await chrome.runtime.sendMessage({ target: 'offscreen', type: 'OCR_RUN', srcUrl, lang });
+  if (!response) throw new Error('OCR engine did not respond.');
+  if (!response.success) throw new Error(response.error || 'OCR failed.');
+  return response;
+}
+
+chrome.contextMenus.onClicked.addListener((info, tab) => {
+  if (info.menuItemId !== OCR_MENU_ID || !tab || tab.id === undefined) return;
+  // Hand off to the frame that holds the image; it draws the overlay.
+  chrome.tabs.sendMessage(
+    tab.id,
+    { type: 'OCR_START', srcUrl: info.srcUrl },
+    { frameId: info.frameId }
+  ).catch(() => {
+    // Tab was closed or the content script is not injected here.
+  });
+});
+
 // Message Dispatcher
 chrome.runtime.onMessage.addListener((message, sender, sendResponse) => {
+  if (message.type === 'OCR_RECOGNIZE') {
+    recognizeImage(message.srcUrl)
+      .then(result => sendResponse({ success: true, width: result.width, height: result.height, words: result.words }))
+      .catch(err => sendResponse({ success: false, error: err.message }));
+    return true;
+  }
+
   if (message.type === 'SEGMENT_BATCH') {
     handleSegmentBatch(message.texts)
       .then(result => sendResponse({ success: true, result }))
@@ -424,6 +476,13 @@ chrome.commands.onCommand.addListener((command) => {
 chrome.runtime.onInstalled.addListener(() => {
   console.log('Extension installed. Triggering dictionary initialization.');
   initializeDictionary();
+  chrome.contextMenus.removeAll(() => {
+    chrome.contextMenus.create({
+      id: OCR_MENU_ID,
+      title: 'Zh-Lens: Overlay Chinese text (OCR)',
+      contexts: ['image'],
+    });
+  });
 });
 
 chrome.runtime.onStartup.addListener(() => {
