@@ -7,6 +7,7 @@ FilesToInclude=(
     "manifest.json"
     "background.js"
     "content.js"
+    "meet-captions.js"
     "styles.css"
     "dictionary/cedict.txt"
     "offscreen/offscreen.html"
