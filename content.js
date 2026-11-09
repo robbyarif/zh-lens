@@ -91,7 +91,10 @@ function isValidChineseTextNode(node) {
       tag === 'rt' ||
       tag === 'rp' ||
       parent.getAttribute('contenteditable') === 'true' ||
-      parent.id === 'zh-lens-tooltip'
+      parent.id === 'zh-lens-tooltip' ||
+      // Google Meet captions: the English window handles them, and inline
+      // annotation would change the caption layout as each word arrives.
+      parent.getAttribute('aria-label') === 'Captions'
     ) {
       return false;
     }

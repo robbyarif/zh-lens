@@ -57,6 +57,7 @@ function updateUI() {
 const pinyinToggle = document.getElementById('pinyin-toggle');
 const translationToggle = document.getElementById('translation-toggle');
 const engineSelect = document.getElementById('engine-select');
+const meetCaptionsToggle = document.getElementById('meet-captions-toggle');
 const ocrScriptSelect = document.getElementById('ocr-script-select');
 const translationProgress = document.getElementById('translation-progress');
 const translationProgressBar = document.getElementById('translation-progress-bar');
@@ -76,6 +77,15 @@ chrome.storage.local.get({ enabled: true, pinyinEnabled: true, translationMode: 
 // this on each image, so no reload is needed.
 chrome.storage.local.get({ ocrScript: 'chi_tra' }, (settings) => {
   ocrScriptSelect.value = settings.ocrScript;
+});
+
+// Meet caption translation is on by default; meet-captions.js reacts via storage.
+chrome.storage.local.get({ meetCaptionTranslation: true }, (settings) => {
+  meetCaptionsToggle.checked = settings.meetCaptionTranslation;
+});
+
+meetCaptionsToggle.addEventListener('change', () => {
+  chrome.storage.local.set({ meetCaptionTranslation: meetCaptionsToggle.checked });
 });
 
 // Persist the chosen translation engine; content scripts react via storage.
@@ -178,6 +188,9 @@ chrome.storage.onChanged.addListener((changes) => {
   }
   if (changes.ocrScript) {
     ocrScriptSelect.value = changes.ocrScript.newValue;
+  }
+  if (changes.meetCaptionTranslation) {
+    meetCaptionsToggle.checked = changes.meetCaptionTranslation.newValue;
   }
 });
 

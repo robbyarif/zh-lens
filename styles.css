@@ -250,6 +250,37 @@ body.zh-lens-pinyin-disabled ruby.zh-lens-word {
 }
 
 /* ---------------------------------------------------------------------------
+ * Google Meet "English window" launcher button (meet-captions.js)
+ * ------------------------------------------------------------------------- */
+#zh-lens-pip-btn {
+  position: fixed;
+  right: 16px;
+  bottom: 96px;
+  z-index: 2147483646;
+  padding: 8px 12px;
+  border: none;
+  border-radius: 999px;
+  background: rgba(15, 23, 42, 0.95);
+  color: #f8fafc;
+  font: 600 13px system-ui, -apple-system, sans-serif;
+  cursor: pointer;
+  box-shadow: 0 4px 14px rgba(0, 0, 0, 0.35);
+}
+
+#zh-lens-pip-btn:hover {
+  background: var(--zh-lens-primary);
+}
+
+#zh-lens-pip-btn[hidden] {
+  display: none;
+}
+
+#zh-lens-pip-btn:disabled {
+  opacity: 0.5;
+  cursor: not-allowed;
+}
+
+/* ---------------------------------------------------------------------------
  * OCR image overlay (right-click an image → "Overlay Chinese text (OCR)")
  * ------------------------------------------------------------------------- */
 .zh-lens-ocr-layer {

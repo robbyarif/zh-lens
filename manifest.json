@@ -43,6 +43,15 @@
       "run_at": "document_idle",
       "all_frames": true,
       "match_about_blank": true
+    },
+    {
+      "matches": [
+        "https://meet.google.com/*"
+      ],
+      "js": [
+        "meet-captions.js"
+      ],
+      "run_at": "document_idle"
     }
   ],
   "action": {
